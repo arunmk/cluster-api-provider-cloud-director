@@ -53,6 +53,8 @@ type VCDClusterSpec struct {
 	UserCredentialsContext UserCredentialsContext `json:"userContext"`
 	// +optional
 	DefaultComputePolicy string `json:"defaultComputePolicy,omitempty"`
+	// +optional
+	R1Cluster bool `json:"r1Cluster,omitempty"`
 }
 
 // VCDClusterStatus defines the observed state of VCDCluster
