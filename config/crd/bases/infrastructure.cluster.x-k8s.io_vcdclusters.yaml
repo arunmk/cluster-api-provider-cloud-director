@@ -52,14 +52,21 @@ spec:
                 type: object
               defaultComputePolicy:
                 type: string
+              isMigratedR1Cluster:
+                description: IsMigratedR1Cluster indicates that the cluster was an
+                  R1 cluster originally
+                type: boolean
               org:
                 type: string
               ovdc:
                 type: string
               ovdcNetwork:
                 type: string
-              r1Cluster:
-                type: boolean
+              r1ClusterEndpoint:
+                description: R1ClusterEndpoint is to be used in migration of an R1
+                  cluster to a CAPVCD cluster. This is an IP:Port string representation
+                  of the api-server endpoint.
+                type: string
               site:
                 type: string
               userContext:
