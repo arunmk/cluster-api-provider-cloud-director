@@ -329,6 +329,138 @@ func checkIfMachineNodeIsUnhealthy(machine *clusterv1.Machine) bool {
 	return false
 }
 
+func (r *VCDMachineReconciler) reconcilePhases(ctx context.Context, machine *clusterv1.Machine,
+	vcdMachine *infrav1beta3.VCDMachine, vcdCluster *infrav1beta3.VCDCluster,
+	vcdClient *vcdsdk.Client, useControlPlaneScript bool, vdcManager *vcdsdk.VdcManager,
+	vApp *govcd.VApp, vm *govcd.VM) (bool, error) {
+
+	log := ctrl.LoggerFrom(ctx, "machine", machine.Name, "cluster", vcdCluster.Name,
+		"reconciler", "reconcilePhases")
+	capvcdRdeManager := capisdk.NewCapvcdRdeManager(vcdClient, vcdCluster.Status.InfraId)
+
+	vcdMachine.Status.UseBuiltInCloudInit = vcdMachine.Spec.UseBuiltInCloudInit
+
+	var phases []string
+	if vcdMachine.Status.UseBuiltInCloudInit {
+		phases = postCustPhases
+		if useControlPlaneScript {
+			phases = append(phases, KubeadmInit)
+		} else {
+			phases = append(phases, KubeadmNodeJoin)
+		}
+
+		if vcdCluster.Spec.ProxyConfigSpec.HTTPSProxy == "" &&
+			vcdCluster.Spec.ProxyConfigSpec.HTTPProxy == "" {
+			phases = removeFromSlice(ProxyConfiguration, phases)
+		}
+	} else {
+		phases = vcdMachine.Spec.CloudInitPhases
+	}
+
+	if err := vApp.Refresh(); err != nil {
+		err1 := capvcdRdeManager.AddToErrorSet(ctx, capisdk.VCDMachineScriptExecutionError, "",
+			machine.Name, fmt.Sprintf("%v", err))
+		if err1 != nil {
+			log.Error(err1, "failed to add VCDMachineScriptExecutionError into RDE",
+				"rdeID", vcdCluster.Status.InfraId)
+		}
+		return false, fmt.Errorf("error while bootstrapping the machine [%s/%s]; unable to refresh vapp: [%v]",
+			vApp.VApp.Name, vm.VM.Name, err)
+	}
+
+	extraConfigs, _, err := vdcManager.GetVmExtraConfigs(vm)
+	if err != nil {
+		return false, fmt.Errorf("error retrieving vm extra configs: [%v]", err)
+	}
+	currentTime := time.Now()
+
+	// We create a map to the index here in order to do an in-place update.
+	cloudInitPhaseMap := make(map[string]int)
+	for idx, cloudInitPhase := range vcdMachine.Status.CloudInitPhases {
+		cloudInitPhaseMap[cloudInitPhase.CloudInitPhase] = idx
+	}
+
+	// this is to represent a basic set
+	phaseMap := make(map[string]bool)
+	for _, phase := range phases {
+		phaseMap[phase] = true
+	}
+
+	lastPhaseName := phases[len(phases)-1]
+	lastPhaseFound := false
+
+	scriptExecutionStatus := 0
+	scriptExecutionFailureReason := ""
+	for _, extraConfig := range extraConfigs {
+		if _, ok := phaseMap[extraConfig.Key]; !ok {
+			// this is not an extraConfig element that represents a phase
+			continue
+		}
+
+		switch extraConfig.Key {
+		case PostCustomizationScriptExecutionStatus:
+			if vcdMachine.Status.UseBuiltInCloudInit {
+				if extraConfig.Value != "" {
+					scriptExecutionStatus, err = strconv.Atoi(extraConfig.Value)
+					if err != nil {
+						return false, fmt.Errorf("unable to convert script execution status [%s] to int: [%v]",
+							extraConfig.Value, err)
+					}
+				}
+			}
+			break
+
+		case PostCustomizationScriptFailureReason:
+			if vcdMachine.Status.UseBuiltInCloudInit {
+				scriptExecutionFailureReason = extraConfig.Value
+			}
+			break
+
+		default:
+			if extraConfig.Value != "" && extraConfig.Value != "in_progress" && extraConfig.Value != "successful" {
+				log.Error(fmt.Errorf("unknown status of phase [%s]: [%v]", extraConfig.Key, extraConfig.Value), "")
+				continue
+			}
+			idx, ok := cloudInitPhaseMap[extraConfig.Key]
+			if !ok {
+				// Phase not seen, so add it
+				vcdMachine.Status.CloudInitPhases = append(vcdMachine.Status.CloudInitPhases, infrav1beta3.CloudInitPhaseStatus{
+					CloudInitPhase:     extraConfig.Key,
+					StartSeenTimestamp: currentTime.String(),
+					EndSeenTimestamp:   "",
+				})
+				// Set the idx so that if we have got a `successful` already, we update it next. Append appends at the
+				// end of the list.
+				idx = len(vcdMachine.Status.CloudInitPhases) - 1
+			}
+			if extraConfig.Value == "successful" {
+				if vcdMachine.Status.CloudInitPhases[idx].EndSeenTimestamp == "" {
+					vcdMachine.Status.CloudInitPhases[idx].EndSeenTimestamp = currentTime.String()
+				}
+				if extraConfig.Key == lastPhaseName {
+					// We cannot return from here itself, since the other phases also need to be updated.
+					lastPhaseFound = true
+				}
+			}
+			break
+		}
+	}
+
+	if vcdMachine.Status.UseBuiltInCloudInit {
+		if scriptExecutionStatus != 0 || scriptExecutionFailureReason != "" {
+			return false, fmt.Errorf("script failed with status [%d] and reason [%s]",
+				scriptExecutionStatus, scriptExecutionFailureReason)
+		}
+	}
+
+	if lastPhaseFound {
+		log.Info("Last phase [%s] has been successfully completed and hence ")
+		return true, nil
+	}
+
+	return false, nil
+}
+
 func (r *VCDMachineReconciler) reconcileNormal(ctx context.Context, cluster *clusterv1.Cluster,
 	machine *clusterv1.Machine, vcdMachine *infrav1beta3.VCDMachine, vcdCluster *infrav1beta3.VCDCluster) (res ctrl.Result, retErr error) {
 
@@ -561,6 +693,7 @@ func (r *VCDMachineReconciler) reconcileNormal(ctx context.Context, cluster *clu
 			return ctrl.Result{}, errors.Wrapf(err, "Error provisioning infrastructure for the machine; unable to find newly created VM [%s] in vApp [%s]",
 				vm.VM.Name, vAppName)
 		}
+
 		if vm == nil || vm.VM == nil {
 			err1 := capvcdRdeManager.AddToErrorSet(ctx, capisdk.VCDMachineCreationError, "", machine.Name, fmt.Sprintf("%v", err))
 			if err1 != nil {
@@ -831,39 +964,11 @@ func (r *VCDMachineReconciler) reconcileNormal(ctx context.Context, cluster *clu
 		log.Error(err, "failed to remove VCDMachineCreationError from RDE", "rdeID", vcdCluster.Status.InfraId)
 	}
 
-	phases := postCustPhases
-	if useControlPlaneScript {
-		phases = append(phases, KubeadmInit)
-	} else {
-		phases = append(phases, KubeadmNodeJoin)
-	}
-
-	if vcdCluster.Spec.ProxyConfigSpec.HTTPSProxy == "" &&
-		vcdCluster.Spec.ProxyConfigSpec.HTTPProxy == "" {
-		phases = removeFromSlice(ProxyConfiguration, phases)
-	}
-
-	for _, phase := range phases {
-		if err = vApp.Refresh(); err != nil {
-			err1 := capvcdRdeManager.AddToErrorSet(ctx, capisdk.VCDMachineScriptExecutionError, "", machine.Name, fmt.Sprintf("%v", err))
-			if err1 != nil {
-				log.Error(err1, "failed to add VCDMachineScriptExecutionError into RDE", "rdeID", vcdCluster.Status.InfraId)
-			}
-			return ctrl.Result{},
-				errors.Wrapf(err, "Error while bootstrapping the machine [%s/%s]; unable to refresh vapp",
-					vAppName, vm.VM.Name)
-		}
-		log.Info(fmt.Sprintf("Start: waiting for the bootstrapping phase [%s] to complete", phase))
-		if err = r.waitForPostCustomizationPhase(ctx, workloadVCDClient, vm, phase); err != nil {
-			log.Error(err, fmt.Sprintf("Error waiting for the bootstrapping phase [%s] to complete", phase))
-			err1 := capvcdRdeManager.AddToErrorSet(ctx, capisdk.VCDMachineScriptExecutionError, "", machine.Name, fmt.Sprintf("%v", err))
-			if err1 != nil {
-				log.Error(err1, "failed to add VCDMachineScriptExecutionError into RDE", "rdeID", vcdCluster.Status.InfraId)
-			}
-			return ctrl.Result{}, errors.Wrapf(err, "Error while bootstrapping the machine [%s/%s]; unable to wait for post customization phase [%s]",
-				vAppName, vm.VM.Name, phase)
-		}
-		log.Info(fmt.Sprintf("End: waiting for the bootstrapping phase [%s] to complete", phase))
+	if result, err := r.reconcilePhases(ctx, machine, vcdMachine, vcdCluster, workloadVCDClient, useControlPlaneScript,
+		vdcManager, vApp, vm); err != nil {
+		return ctrl.Result{}, err
+	} else if !result {
+		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 
 	err = capvcdRdeManager.RdeManager.RemoveErrorByNameOrIdFromErrorSet(ctx, vcdsdk.ComponentCAPVCD, capisdk.VCDMachineScriptExecutionError, "", "")

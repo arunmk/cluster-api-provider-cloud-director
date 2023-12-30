@@ -504,6 +504,14 @@ spec:
               catalog:
                 description: Catalog hosting templates
                 type: string
+              cloudInitPhases:
+                description: CloudInitPhases is an __ordered__ list of phases that
+                  indicate progress of cloud-init. The controller will look for these
+                  phases to be emited in the order specified. However, the cloud-init
+                  script may emit these phases in whatever order it wants to do so.
+                items:
+                  type: string
+                type: array
               diskSize:
                 anyOf:
                 - type: integer
@@ -545,6 +553,10 @@ spec:
                 description: TemplatePath is the path of the template OVA that is
                   to be used
                 type: string
+              useBuiltInCloudInit:
+                default: true
+                description: UseBuiltInCloudInit is a boolean which defaults to true
+                type: boolean
               vmNamingTemplate:
                 description: VmNamingTemplate is go template to generate VM names
                   based on Machine and VCDMachine CRs. Functions of Sprig library
@@ -572,6 +584,30 @@ spec:
                   required:
                   - address
                   - type
+                  type: object
+                type: array
+              cloudInitPhases:
+                description: CloudInitPhases records the list of phases that have
+                  been completed so far. The name of the phase and the time when the
+                  phase was first seen are recorded.
+                items:
+                  properties:
+                    cloudInitPhase:
+                      description: CloudInitPhase is the phase that has been completed.
+                      type: string
+                    endSeenTime:
+                      description: EndSeenTimestamp records the first time that the
+                        phase was seen by the controller and had a `successful` status.
+                      type: string
+                    startSeenTime:
+                      description: StartSeenTimestamp records the first time that
+                        the phase was seen by the controller and had an `in_progress`
+                        status.
+                      type: string
+                  required:
+                  - cloudInitPhase
+                  - endSeenTime
+                  - startSeenTime
                   type: object
                 type: array
               conditions:
@@ -651,6 +687,9 @@ spec:
                 description: Template is the path of the template OVA that is to be
                   used
                 type: string
+              useBuiltInCloudInit:
+                description: UseBuiltInCloudInit records what was set in the Spec
+                type: boolean
             type: object
         type: object
     served: true

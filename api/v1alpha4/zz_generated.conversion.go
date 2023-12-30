@@ -466,6 +466,8 @@ func autoConvert_v1beta3_VCDMachineSpec_To_v1alpha4_VCDMachineSpec(in *v1beta3.V
 	// WARNING: in.EnableNvidiaGPU requires manual conversion: does not exist in peer-type
 	// WARNING: in.ExtraOvdcNetworks requires manual conversion: does not exist in peer-type
 	// WARNING: in.VmNamingTemplate requires manual conversion: does not exist in peer-type
+	// WARNING: in.CloudInitPhases requires manual conversion: does not exist in peer-type
+	// WARNING: in.UseBuiltInCloudInit requires manual conversion: does not exist in peer-type
 	return nil
 }
 
@@ -491,6 +493,8 @@ func autoConvert_v1beta3_VCDMachineStatus_To_v1alpha4_VCDMachineStatus(in *v1bet
 	// WARNING: in.NvidiaGPUEnabled requires manual conversion: does not exist in peer-type
 	// WARNING: in.DiskSize requires manual conversion: does not exist in peer-type
 	out.Conditions = *(*apiv1alpha4.Conditions)(unsafe.Pointer(&in.Conditions))
+	// WARNING: in.CloudInitPhases requires manual conversion: does not exist in peer-type
+	// WARNING: in.UseBuiltInCloudInit requires manual conversion: does not exist in peer-type
 	return nil
 }
 

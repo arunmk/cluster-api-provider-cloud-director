@@ -83,6 +83,26 @@ type VCDMachineSpec struct {
 	// Immutable field. machine.Name is used as VM name when this field is empty.
 	// +optional
 	VmNamingTemplate string `json:"vmNamingTemplate,omitempty"`
+
+	// CloudInitPhases is an __ordered__ list of phases that indicate progress of cloud-init.
+	// The controller will look for these phases to be emited in the order specified. However,
+	// the cloud-init script may emit these phases in whatever order it wants to do so.
+	// +optional
+	CloudInitPhases []string `json:"cloudInitPhases,omitempty"`
+
+	// UseBuiltInCloudInit is a boolean which defaults to true
+	// +kubebuilder:default:=true
+	// +optional
+	UseBuiltInCloudInit bool `json:"useBuiltInCloudInit"`
+}
+
+type CloudInitPhaseStatus struct {
+	// CloudInitPhase is the phase that has been completed.
+	CloudInitPhase string `json:"cloudInitPhase"`
+	// StartSeenTimestamp records the first time that the phase was seen by the controller and had an `in_progress` status.
+	StartSeenTimestamp string `json:"startSeenTime"`
+	// EndSeenTimestamp records the first time that the phase was seen by the controller and had a `successful` status.
+	EndSeenTimestamp string `json:"endSeenTime"`
 }
 
 // VCDMachineStatus defines the observed state of VCDMachine
@@ -125,6 +145,15 @@ type VCDMachineStatus struct {
 	// Conditions defines current service state of the DockerMachine.
 	// +optional
 	Conditions clusterv1.Conditions `json:"conditions,omitempty"`
+
+	// CloudInitPhases records the list of phases that have been completed so far. The name of the phase and the
+	// time when the phase was first seen are recorded.
+	// +optional
+	CloudInitPhases []CloudInitPhaseStatus `json:"cloudInitPhases,omitempty"`
+
+	// UseBuiltInCloudInit records what was set in the Spec
+	// +optional
+	UseBuiltInCloudInit bool `json:"useBuiltInCloudInit"`
 }
 
 // +kubebuilder:object:root=true

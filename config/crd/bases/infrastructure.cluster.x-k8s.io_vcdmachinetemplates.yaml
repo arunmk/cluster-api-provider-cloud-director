@@ -331,6 +331,15 @@ spec:
                       catalog:
                         description: Catalog hosting templates
                         type: string
+                      cloudInitPhases:
+                        description: CloudInitPhases is an __ordered__ list of phases
+                          that indicate progress of cloud-init. The controller will
+                          look for these phases to be emited in the order specified.
+                          However, the cloud-init script may emit these phases in
+                          whatever order it wants to do so.
+                        items:
+                          type: string
+                        type: array
                       diskSize:
                         anyOf:
                         - type: integer
@@ -372,6 +381,11 @@ spec:
                         description: TemplatePath is the path of the template OVA
                           that is to be used
                         type: string
+                      useBuiltInCloudInit:
+                        default: true
+                        description: UseBuiltInCloudInit is a boolean which defaults
+                          to true
+                        type: boolean
                       vmNamingTemplate:
                         description: VmNamingTemplate is go template to generate VM
                           names based on Machine and VCDMachine CRs. Functions of

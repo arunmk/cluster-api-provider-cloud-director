@@ -377,7 +377,7 @@ func (vdc *VdcManager) IsVmNotAvailable(err error) bool {
 }
 
 // the returned extra configs is part of the returned vm
-func (vdc *VdcManager) getVmExtraConfigs(vm *govcd.VM) ([]*ExtraConfig, *Vm, error) {
+func (vdc *VdcManager) GetVmExtraConfigs(vm *govcd.VM) ([]*ExtraConfig, *Vm, error) {
 	extraConfigVm := &Vm{}
 
 	if vm.VM.HREF == "" {
@@ -394,7 +394,7 @@ func (vdc *VdcManager) getVmExtraConfigs(vm *govcd.VM) ([]*ExtraConfig, *Vm, err
 }
 
 func (vdc *VdcManager) GetExtraConfigValue(vm *govcd.VM, key string) (string, error) {
-	extraConfigs, _, err := vdc.getVmExtraConfigs(vm)
+	extraConfigs, _, err := vdc.GetVmExtraConfigs(vm)
 	if err != nil {
 		return "", fmt.Errorf("error retrieving vm extra configs: [%v]", err)
 	}
@@ -422,7 +422,7 @@ func (vdc *VdcManager) getTaskFromResponse(resp *http.Response) (*govcd.Task, er
 }
 
 func (vdc *VdcManager) SetVmExtraConfigKeyValue(vm *govcd.VM, key string, value string, required bool) error {
-	_, extraConfigVm, err := vdc.getVmExtraConfigs(vm)
+	_, extraConfigVm, err := vdc.GetVmExtraConfigs(vm)
 	if err != nil {
 		return fmt.Errorf("error retrieving vm extra configs: [%v]", err)
 	}
