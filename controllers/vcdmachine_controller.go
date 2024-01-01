@@ -610,45 +610,51 @@ func (r *VCDMachineReconciler) reconcileNormal(ctx context.Context, cluster *clu
 	// Hence we are checking if it contains the control plane label and has kubeadm join in the script
 	isResizedControlPlane := util.IsControlPlaneMachine(machine) && strings.Contains(bootstrapJinjaScript, "kubeadm join")
 
-	// Construct a CloudInitScriptInput struct to pass into template.Execute() function to generate the necessary
-	// cloud init script for the relevant node type, i.e. control plane or worker node
-	cloudInitInput := CloudInitScriptInput{}
-	if !vcdMachine.Spec.Bootstrapped {
-		if useControlPlaneScript {
-			cloudInitInput = CloudInitScriptInput{
-				ControlPlane: true,
+	cloudInit := ""
+	if vcdMachine.Spec.UseBuiltInCloudInit {
+		// Construct a CloudInitScriptInput struct to pass into template.Execute() function to generate the necessary
+		// cloud init script for the relevant node type, i.e. control plane or worker node
+		cloudInitInput := CloudInitScriptInput{}
+		if !vcdMachine.Spec.Bootstrapped {
+			if useControlPlaneScript {
+				cloudInitInput = CloudInitScriptInput{
+					ControlPlane: true,
+				}
 			}
+
+			cloudInitInput.HTTPProxy = vcdCluster.Spec.ProxyConfigSpec.HTTPProxy
+			cloudInitInput.HTTPSProxy = vcdCluster.Spec.ProxyConfigSpec.HTTPSProxy
+			cloudInitInput.NoProxy = vcdCluster.Spec.ProxyConfigSpec.NoProxy
+			cloudInitInput.MachineName = vmName
+
+			// TODO: After tenants has access to siteId, populate siteId to cloudInitInput as opposed to the site
+			cloudInitInput.VcdHostFormatted = strings.ReplaceAll(vcdCluster.Spec.Site, "/", "\\/")
+			cloudInitInput.NvidiaGPU = false
+			cloudInitInput.TKGVersion = getTKGVersion(cluster)   // needed for both worker & control plane machines for metering
+			cloudInitInput.ClusterID = vcdCluster.Status.InfraId // needed for both worker & control plane machines for metering
+			cloudInitInput.ResizedControlPlane = isResizedControlPlane
 		}
 
-		cloudInitInput.HTTPProxy = vcdCluster.Spec.ProxyConfigSpec.HTTPProxy
-		cloudInitInput.HTTPSProxy = vcdCluster.Spec.ProxyConfigSpec.HTTPSProxy
-		cloudInitInput.NoProxy = vcdCluster.Spec.ProxyConfigSpec.NoProxy
-		cloudInitInput.MachineName = vmName
-
-		// TODO: After tenants has access to siteId, populate siteId to cloudInitInput as opposed to the site
-		cloudInitInput.VcdHostFormatted = strings.ReplaceAll(vcdCluster.Spec.Site, "/", "\\/")
-		cloudInitInput.NvidiaGPU = false
-		cloudInitInput.TKGVersion = getTKGVersion(cluster)   // needed for both worker & control plane machines for metering
-		cloudInitInput.ClusterID = vcdCluster.Status.InfraId // needed for both worker & control plane machines for metering
-		cloudInitInput.ResizedControlPlane = isResizedControlPlane
-	}
-
-	mergedCloudInitBytes, err := MergeJinjaToCloudInitScript(cloudInitInput, bootstrapJinjaScript)
-	if err != nil {
-		err1 := capvcdRdeManager.AddToErrorSet(ctx, capisdk.VCDMachineScriptGenerationError, "", machine.Name, fmt.Sprintf("%v", err))
-		if err1 != nil {
-			log.Error(err1, "failed to add VCDMachineScriptGenerationError into RDE", "rdeID", vcdCluster.Status.InfraId)
+		mergedCloudInitBytes, err := MergeJinjaToCloudInitScript(cloudInitInput, bootstrapJinjaScript)
+		if err != nil {
+			err1 := capvcdRdeManager.AddToErrorSet(ctx, capisdk.VCDMachineScriptGenerationError, "", machine.Name, fmt.Sprintf("%v", err))
+			if err1 != nil {
+				log.Error(err1, "failed to add VCDMachineScriptGenerationError into RDE", "rdeID", vcdCluster.Status.InfraId)
+			}
+			return ctrl.Result{}, errors.Wrapf(err,
+				"Error merging bootstrap jinja script with the cloudInit script for [%s/%s] [%s]",
+				vAppName, machine.Name, bootstrapJinjaScript)
 		}
-		return ctrl.Result{}, errors.Wrapf(err,
-			"Error merging bootstrap jinja script with the cloudInit script for [%s/%s] [%s]",
-			vAppName, machine.Name, bootstrapJinjaScript)
+		cloudInit = string(mergedCloudInitBytes)
+	} else {
+		cloudInit = bootstrapJinjaScript
 	}
-
-	cloudInit := string(mergedCloudInitBytes)
 
 	// nothing is redacted in the cloud init script - please ensure no secrets are present
 	log.V(2).Info(fmt.Sprintf("Cloud init Script: [%s]", cloudInit))
-	err = capvcdRdeManager.AddToEventSet(ctx, capisdk.CloudInitScriptGenerated, "", machine.Name, "", skipRDEEventUpdates)
+
+	err = capvcdRdeManager.AddToEventSet(ctx, capisdk.CloudInitScriptGenerated, "", machine.Name,
+		"", skipRDEEventUpdates)
 	if err != nil {
 		log.Error(err, "failed to add CloudInitScriptGenerated event into RDE", "rdeID", vcdCluster.Status.InfraId)
 	}
@@ -882,7 +888,7 @@ func (r *VCDMachineReconciler) reconcileNormal(ctx context.Context, cluster *clu
 	}
 	if vmStatus != "POWERED_ON" {
 		// try to power on the VM
-		b64CloudInitScript := b64.StdEncoding.EncodeToString(mergedCloudInitBytes)
+		b64CloudInitScript := b64.StdEncoding.EncodeToString([]byte(cloudInit))
 		keyVals := map[string]string{
 			"guestinfo.userdata":          b64CloudInitScript,
 			"guestinfo.userdata.encoding": "base64",
